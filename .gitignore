@@ -1,0 +1,18 @@
+# Bytecode
+__pycache__/
+*.py[cod]
+
+# Build artifacts
+build/
+dist/
+*.spec
+
+# Virtual environment
+.venv/
+
+# Logs / user data
+*.log
+*.csv
+timetracker_data.json
+all_clients_sessions.csv
+timetracker_data.json

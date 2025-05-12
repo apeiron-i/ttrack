@@ -1,8 +1,5 @@
-# pyinstaller ttrack.spec
-
-
+# ttrack_csv_version.py
 import sys
-import json
 import csv
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -20,32 +17,41 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QSystemTrayIcon
 
-DATA_FILE = Path("timetracker_data.json")
+DATA_FILE = Path("sessions.csv")
 
 
-def load_data():
+def load_sessions():
+    sessions = []
     if DATA_FILE.exists():
-        return json.loads(DATA_FILE.read_text())
-    return {}
+        with open(DATA_FILE, newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                sessions.append(
+                    {"client": row["Client"], "start": row["Start"], "end": row["End"]}
+                )
+    return sessions
 
 
-def save_data(data):
-    DATA_FILE.write_text(json.dumps(data, indent=2))
+def append_session(client, start, end):
+    write_header = not DATA_FILE.exists()
+    with open(DATA_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(["Client", "Start", "End"])
+        writer.writerow([client, start.isoformat(), end.isoformat()])
 
 
 class TimeTracker(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TT")
-
-        self.setWindowIcon(QIcon("icon.png"))  # Sets the main app window icon
+        self.setWindowIcon(QIcon("icon_tt.ico"))
 
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon("icon.png"))  # Replaces the default tray icon
+        self.tray_icon.setIcon(QIcon("icon_tt.ico"))
         self.tray_icon.setVisible(True)
 
-        self.resize(300, 300)
-        self.setFixedSize(300, 240)  # width, height
+        self.setFixedSize(300, 220)
 
         self.setStyleSheet("""
             QWidget {
@@ -75,11 +81,10 @@ class TimeTracker(QWidget):
             }
         """)
 
-        self.data = load_data()
+        self.sessions = load_sessions()
         self.current_client = None
         self.start_time = None
 
-        # Layout setup
         layout = QVBoxLayout()
         layout.setSpacing(10)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -88,7 +93,7 @@ class TimeTracker(QWidget):
         # Client selection
         hlayout = QHBoxLayout()
         self.client_dropdown = QComboBox()
-        self.client_dropdown.addItems(self.data.keys())
+        self.client_dropdown.addItems(sorted(set(s["client"] for s in self.sessions)))
         self.client_dropdown.currentTextChanged.connect(self.select_client)
         self.add_client_input = QLineEdit()
         self.add_client_input.setPlaceholderText("New client name")
@@ -97,73 +102,53 @@ class TimeTracker(QWidget):
         hlayout.addWidget(self.add_client_input)
         layout.addLayout(hlayout)
 
-        # Start/Stop button
         self.timer_button = QPushButton("Start")
         self.timer_button.clicked.connect(self.toggle_timer)
         self.timer_button.setStyleSheet("background-color: #28a745; color: white;")
         layout.addWidget(self.timer_button)
 
-        # Session timer
         self.session_label = QLabel("Session: 0h 0m 0s")
         layout.addWidget(self.session_label)
 
-        # Spacer between session and totals
         layout.addSpacing(8)
 
-        # Totals
         self.time_label = QLabel()
         layout.addWidget(self.time_label)
 
-        # Export button (subtle, right-aligned)
-        self.export_button = QPushButton("Export CSV")
-        self.export_button.clicked.connect(self.export_csv)
-        self.export_button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #aaa;
-                font-size: 12px;
-                padding: 2px;
-                border: none;
-                text-align: right;
-            }
-            QPushButton:hover {
-                color: #fff;
-            }
-        """)
-        layout.addWidget(self.export_button, alignment=Qt.AlignRight)
-
         self.setLayout(layout)
 
-        # Start timer
         self.timer = QTimer()
-        self.timer.setInterval(1000)  # Update every second
+        self.timer.setInterval(1000)
         self.timer.timeout.connect(self.update_ui)
         self.timer.start()
 
         if self.client_dropdown.count():
-            default = self.client_dropdown.currentText()
-            self.select_client(default)
-            QTimer.singleShot(0, self.update_ui)  # Ensure totals show immediately
+            self.select_client(self.client_dropdown.currentText())
+            QTimer.singleShot(0, self.update_ui)
 
     def add_client(self):
         name = self.add_client_input.text().strip()
-        if name and name not in self.data:
-            self.data[name] = []
+        if name and name not in [
+            self.client_dropdown.itemText(i)
+            for i in range(self.client_dropdown.count())
+        ]:
             self.client_dropdown.addItem(name)
             self.add_client_input.clear()
-            save_data(self.data)
 
     def select_client(self, name):
-        # Stop timer for previous client, if running
         if self.start_time:
             end_time = datetime.now()
-            self.data[self.current_client].append(
-                {"start": self.start_time.isoformat(), "end": end_time.isoformat()}
+            append_session(self.current_client, self.start_time, end_time)
+            self.sessions.append(
+                {
+                    "client": self.current_client,
+                    "start": self.start_time.isoformat(),
+                    "end": end_time.isoformat(),
+                }
             )
             self.start_time = None
             self.timer_button.setText("Start")
             self.timer_button.setStyleSheet("background-color: #28a745; color: white;")
-            save_data(self.data)
 
         self.current_client = name
         self.update_ui()
@@ -174,13 +159,17 @@ class TimeTracker(QWidget):
 
         if self.start_time:
             end_time = datetime.now()
-            self.data[self.current_client].append(
-                {"start": self.start_time.isoformat(), "end": end_time.isoformat()}
+            append_session(self.current_client, self.start_time, end_time)
+            self.sessions.append(
+                {
+                    "client": self.current_client,
+                    "start": self.start_time.isoformat(),
+                    "end": end_time.isoformat(),
+                }
             )
             self.start_time = None
             self.timer_button.setText("Start")
             self.timer_button.setStyleSheet("background-color: #28a745; color: white;")
-            save_data(self.data)
         else:
             self.start_time = datetime.now()
             self.timer_button.setText("Stop")
@@ -198,14 +187,14 @@ class TimeTracker(QWidget):
         total_week = timedelta()
         total_month = timedelta()
         now = datetime.now()
-
-        # Calendar-aligned week start (Monday 00:00)
         start_of_week = now - timedelta(days=now.weekday())
         start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        for session in self.data.get(self.current_client, []):
-            start = datetime.fromisoformat(session["start"])
-            end = datetime.fromisoformat(session["end"])
+        for s in self.sessions:
+            if s["client"] != self.current_client:
+                continue
+            start = datetime.fromisoformat(s["start"])
+            end = datetime.fromisoformat(s["end"])
             duration = end - start
 
             if start.date() == now.date():
@@ -215,12 +204,11 @@ class TimeTracker(QWidget):
             if start.year == now.year and start.month == now.month:
                 total_month += duration
 
-        session_duration = timedelta()
         if self.start_time:
-            session_duration = now - self.start_time
-            total_today += session_duration
-            total_week += session_duration
-            total_month += session_duration
+            live = datetime.now() - self.start_time
+            total_today += live
+            total_week += live
+            total_month += live
 
         def fmt(td):
             return f"{td.total_seconds() / 3600:.1f}h"
@@ -234,31 +222,13 @@ class TimeTracker(QWidget):
         )
 
         if self.start_time:
-            hours, remainder = divmod(int(session_duration.total_seconds()), 3600)
+            hours, remainder = divmod(
+                int((datetime.now() - self.start_time).total_seconds()), 3600
+            )
             minutes, seconds = divmod(remainder, 60)
             self.session_label.setText(f"Session: {hours}h {minutes}m {seconds}s")
         else:
             self.session_label.setText("Session: 0h 0m 0s")
-
-    def export_csv(self):
-        if not self.data:
-            return
-
-        filename = "all_clients_sessions.csv"
-        with open(filename, "w", newline="") as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(["Client", "Start", "End", "Duration (hours)"])
-
-            for client, sessions in self.data.items():
-                for session in sessions:
-                    start = datetime.fromisoformat(session["start"])
-                    end = datetime.fromisoformat(session["end"])
-                    duration = (end - start).total_seconds() / 3600
-                    writer.writerow(
-                        [client, start.isoformat(), end.isoformat(), f"{duration:.2f}"]
-                    )
-
-        print(f"Exported all clients to {filename}")
 
 
 if __name__ == "__main__":

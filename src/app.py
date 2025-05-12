@@ -1,4 +1,4 @@
-# ttrack_csv_version.py
+# ttrack_csv_version.py with session recovery (no export button, fixed size)
 import sys
 import csv
 from datetime import datetime, timedelta
@@ -12,12 +12,15 @@ from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QLineEdit,
+    QMessageBox,
 )
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QSystemTrayIcon
 
 DATA_FILE = Path("sessions.csv")
+RUNNING_FILE = Path("running_session.csv")
+HEARTBEAT_FILE = Path("last_seen.txt")
 
 
 def load_sessions():
@@ -41,12 +44,46 @@ def append_session(client, start, end):
         writer.writerow([client, start.isoformat(), end.isoformat()])
 
 
+def save_running_session(client, start):
+    with open(RUNNING_FILE, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Client", "Start"])
+        writer.writerow([client, start.isoformat()])
+
+
+def load_running_session():
+    if not RUNNING_FILE.exists():
+        return None
+    with open(RUNNING_FILE, newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            return row["Client"], datetime.fromisoformat(row["Start"])
+    return None
+
+
+def save_heartbeat():
+    HEARTBEAT_FILE.write_text(datetime.now().isoformat())
+
+
+def load_heartbeat():
+    if HEARTBEAT_FILE.exists():
+        return datetime.fromisoformat(HEARTBEAT_FILE.read_text())
+    return None
+
+
+def clear_session_state():
+    if RUNNING_FILE.exists():
+        RUNNING_FILE.unlink()
+    if HEARTBEAT_FILE.exists():
+        HEARTBEAT_FILE.unlink()
+
+
 class TimeTracker(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TT")
         self.setWindowIcon(QIcon("icon_tt.ico"))
-
+        self.heartbeat_counter = 0
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(QIcon("icon_tt.ico"))
         self.tray_icon.setVisible(True)
@@ -90,7 +127,6 @@ class TimeTracker(QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setAlignment(Qt.AlignTop)
 
-        # Client selection
         hlayout = QHBoxLayout()
         self.client_dropdown = QComboBox()
         self.client_dropdown.addItems(sorted(set(s["client"] for s in self.sessions)))
@@ -122,9 +158,38 @@ class TimeTracker(QWidget):
         self.timer.timeout.connect(self.update_ui)
         self.timer.start()
 
+        self.recover_session()
+
         if self.client_dropdown.count():
             self.select_client(self.client_dropdown.currentText())
             QTimer.singleShot(0, self.update_ui)
+
+    def recover_session(self):
+        recovered = load_running_session()
+        if recovered:
+            client, start = recovered
+            last_seen = load_heartbeat() or datetime.now()
+            elapsed = last_seen - start
+            minutes = int(elapsed.total_seconds() / 60)
+
+            reply = QMessageBox.question(
+                self,
+                "Recover session?",
+                f"A session for '{client}' started at {start.strftime('%H:%M')} and last seen at {last_seen.strftime('%H:%M')}\nLog {minutes} minutes?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+
+            if reply == QMessageBox.Yes:
+                append_session(client, start, last_seen)
+                self.sessions.append(
+                    {
+                        "client": client,
+                        "start": start.isoformat(),
+                        "end": last_seen.isoformat(),
+                    }
+                )
+
+            clear_session_state()
 
     def add_client(self):
         name = self.add_client_input.text().strip()
@@ -172,12 +237,20 @@ class TimeTracker(QWidget):
             self.timer_button.setStyleSheet("background-color: #28a745; color: white;")
         else:
             self.start_time = datetime.now()
+            save_running_session(self.current_client, self.start_time)
+            save_heartbeat()
             self.timer_button.setText("Stop")
             self.timer_button.setStyleSheet("background-color: #dc3545; color: white;")
 
         self.update_ui()
 
     def update_ui(self):
+        if self.start_time:
+            self.heartbeat_counter += 1
+            if self.heartbeat_counter >= 60:  # once per minute
+                save_heartbeat()
+                self.heartbeat_counter = 0
+
         if not self.current_client:
             self.time_label.setText("No client selected.")
             self.session_label.setText("Session: 0h 0m 0s")

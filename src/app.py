@@ -21,6 +21,8 @@ from PySide6.QtWidgets import QSystemTrayIcon
 DATA_FILE = Path("sessions.csv")
 RUNNING_FILE = Path("running_session.csv")
 HEARTBEAT_FILE = Path("last_seen.txt")
+ICON_PATH = Path(__file__).parent / "icon_tt.ico"
+ICON_ON_PATH = Path(__file__).parent / "icon_on.ico"
 
 
 def load_sessions():
@@ -82,10 +84,14 @@ class TimeTracker(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TT")
-        self.setWindowIcon(QIcon("icon_tt.ico"))
-        self.heartbeat_counter = 0
+
+        self.setWindowIcon(QIcon(str(ICON_PATH)))
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon("icon_tt.ico"))
+        self.tray_icon.setIcon(QIcon(str(ICON_PATH)))
+
+        # self.setWindowIcon(QIcon("icon_tt.ico"))
+        self.heartbeat_counter = 0
+        # self.tray_icon.setIcon(QIcon("icon_tt.ico"))
         self.tray_icon.setVisible(True)
 
         self.setFixedSize(300, 220)
@@ -128,8 +134,18 @@ class TimeTracker(QWidget):
         layout.setAlignment(Qt.AlignTop)
 
         hlayout = QHBoxLayout()
+
+        # self.client_dropdown = QComboBox()
+        # self.client_dropdown.addItems(sorted(set(s["client"] for s in self.sessions)))
         self.client_dropdown = QComboBox()
-        self.client_dropdown.addItems(sorted(set(s["client"] for s in self.sessions)))
+        clients = [s["client"] for s in self.sessions]
+        unique_clients = sorted(set(clients))
+        self.client_dropdown.addItems(unique_clients)
+
+        # Preselect the most recent client if sessions exist
+        if clients:
+            self.client_dropdown.setCurrentText(clients[-1])
+
         self.client_dropdown.currentTextChanged.connect(self.select_client)
         self.add_client_input = QLineEdit()
         self.add_client_input.setPlaceholderText("New client name")
@@ -223,6 +239,7 @@ class TimeTracker(QWidget):
             return
 
         if self.start_time:
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
             end_time = datetime.now()
             append_session(self.current_client, self.start_time, end_time)
             self.sessions.append(
@@ -236,6 +253,7 @@ class TimeTracker(QWidget):
             self.timer_button.setText("Start")
             self.timer_button.setStyleSheet("background-color: #28a745; color: white;")
         else:
+            self.setWindowIcon(QIcon(str(ICON_ON_PATH)))
             self.start_time = datetime.now()
             save_running_session(self.current_client, self.start_time)
             save_heartbeat()
@@ -306,6 +324,7 @@ class TimeTracker(QWidget):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(ICON_PATH)))
     win = TimeTracker()
     win.show()
     sys.exit(app.exec())

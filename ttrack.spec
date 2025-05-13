@@ -13,7 +13,7 @@ a = Analysis(
     excludes=[],
     noarchive=False,
     optimize=0,
-    datas=[("icon_tt.ico", ".")],
+    datas=[("icon_tt.ico", "."), ("icon_on.ico", ".")],
 )
 pyz = PYZ(a.pure)
 
@@ -36,5 +36,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon_tt.ico'],
+    icon='icon_tt.ico',
 )

@@ -240,6 +240,10 @@ class TimeTracker(QWidget):
 
         if self.start_time:
             self.setWindowIcon(QIcon(str(ICON_PATH)))
+            self.tray_icon.setIcon(QIcon(str(ICON_PATH)))
+            self.tray_icon.setToolTip("Timer stopped")
+            self.tray_icon.show()
+
             end_time = datetime.now()
             append_session(self.current_client, self.start_time, end_time)
             clear_session_state()
@@ -255,6 +259,10 @@ class TimeTracker(QWidget):
             self.timer_button.setStyleSheet("background-color: #28a745; color: white;")
         else:
             self.setWindowIcon(QIcon(str(ICON_ON_PATH)))
+            self.tray_icon.setIcon(QIcon(str(ICON_ON_PATH)))
+            self.tray_icon.setToolTip("Timer running…")
+            self.tray_icon.show()
+
             self.start_time = datetime.now()
             save_running_session(self.current_client, self.start_time)
             save_heartbeat()

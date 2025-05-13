@@ -242,6 +242,7 @@ class TimeTracker(QWidget):
             self.setWindowIcon(QIcon(str(ICON_PATH)))
             end_time = datetime.now()
             append_session(self.current_client, self.start_time, end_time)
+            clear_session_state()
             self.sessions.append(
                 {
                     "client": self.current_client,

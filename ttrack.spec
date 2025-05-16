@@ -1,20 +1,29 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_submodules
 
+# Collect all plotly data files (e.g., templates, configs, etc.)
+plotly_data = collect_data_files("plotly")
+hiddenimports = collect_submodules("plotly")
 
 a = Analysis(
     ['src\\app.py'],
     pathex=[],
     binaries=[],
-    hiddenimports=[],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
     optimize=0,
-    datas=[("icon_tt.ico", "."), ("icon_on.ico", ".")],
+    datas=[
+        ("icon_tt.ico", "."),
+        ("icon_on.ico", "."),
+        *plotly_data
+    ],
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

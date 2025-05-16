@@ -17,12 +17,91 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QSystemTrayIcon
+import subprocess
+import platform
+import webbrowser
+import plotly.express as px
+import pandas as pd
 
 DATA_FILE = Path("sessions.csv")
 RUNNING_FILE = Path("running_session.csv")
 HEARTBEAT_FILE = Path("last_seen.txt")
 ICON_PATH = Path(__file__).parent / "icon_tt.ico"
 ICON_ON_PATH = Path(__file__).parent / "icon_on.ico"
+
+
+def generate_report():
+    df = pd.read_csv("sessions.csv", parse_dates=["Start", "End"])
+    df["Duration"] = (df["End"] - df["Start"]).dt.total_seconds() / 3600
+    df["Date"] = df["Start"].dt.date
+    df["Week"] = df["Start"].dt.to_period("W").apply(lambda r: r.start_time)
+    df["Month"] = df["Start"].dt.to_period("M").apply(lambda r: r.start_time)
+    df["Weekday"] = df["Start"].dt.weekday
+
+    chart_height = 500
+
+    # ----- 1. Monthly totals per client -----
+    monthly = df.groupby(["Client", "Month"])["Duration"].sum().reset_index()
+    fig_monthly = px.bar(
+        monthly,
+        x="Month",
+        y="Duration",
+        color="Client",
+        title="Total Hours per Client per Month",
+        labels={"Duration": "Hours"},
+        height=chart_height,
+    )
+
+    # ----- 2. Weekly totals per client -----
+    weekly = df.groupby(["Client", "Week"])["Duration"].sum().reset_index()
+    fig_weekly = px.bar(
+        weekly,
+        x="Week",
+        y="Duration",
+        color="Client",
+        title="Total Hours per Client per Week",
+        labels={"Duration": "Hours"},
+        height=chart_height,
+    )
+
+    # ----- 3. Daily average including all days -----
+    days_worked = df.groupby("Client")["Date"].nunique()
+    total_hours = df.groupby("Client")["Duration"].sum()
+    daily_avg = (total_hours / days_worked).reset_index()
+    daily_avg.columns = ["Client", "AvgHoursPerDay"]
+    fig_avg = px.bar(
+        daily_avg,
+        x="Client",
+        y="AvgHoursPerDay",
+        title="Average Hours per Day (All Days)",
+        labels={"AvgHoursPerDay": "Avg Hours"},
+        height=chart_height,
+    )
+
+    # ----- 4. Total hours per client per day -----
+    per_day = df.groupby(["Client", "Date"])["Duration"].sum().reset_index()
+    fig_day = px.bar(
+        per_day,
+        x="Date",
+        y="Duration",
+        color="Client",
+        title="Total Hours per Client per Day",
+        labels={"Duration": "Hours"},
+        height=chart_height,
+    )
+
+    # ----- Combine all into one HTML file -----
+    html_path = Path("report.html")
+    with open(html_path, "w") as f:
+        f.write("<html><head><title>Time Tracking Report</title></head><body>\n")
+        f.write("<h4 style='font-family:sans-serif;'>Time Tracking Summary</h4>\n")
+        f.write(fig_day.to_html(full_html=False, include_plotlyjs="cdn"))
+        f.write(fig_weekly.to_html(full_html=False, include_plotlyjs=False))
+        f.write(fig_monthly.to_html(full_html=False, include_plotlyjs=False))
+        f.write(fig_avg.to_html(full_html=False, include_plotlyjs=False))
+        f.write("</body></html>")
+
+    print(f"✅ Report saved to {html_path.resolve()}")
 
 
 def load_sessions():
@@ -94,7 +173,7 @@ class TimeTracker(QWidget):
         # self.tray_icon.setIcon(QIcon("icon_tt.ico"))
         self.tray_icon.setVisible(True)
 
-        self.setFixedSize(300, 220)
+        self.setFixedSize(300, 260)
 
         self.setStyleSheet("""
             QWidget {
@@ -175,6 +254,49 @@ class TimeTracker(QWidget):
         self.timer.start()
 
         self.recover_session()
+
+        button_hlayout = QHBoxLayout()
+        self.edit_button = QPushButton("Edit CSV")
+        self.edit_button.setStyleSheet(
+            """
+            QPushButton {
+                font-size: 12px; color: #ccc; background-color: #333;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #444;
+                color: #fff;
+            }
+            QPushButton:pressed {
+                background-color: #222;
+                color: #fff;
+            }
+            """
+        )
+        self.edit_button.clicked.connect(self.open_csv_file)
+        button_hlayout.addWidget(self.edit_button)
+
+        self.stats_button = QPushButton("Stats")
+        self.stats_button.setStyleSheet(
+            """
+            QPushButton {
+                font-size: 12px; color: #ccc; background-color: #333;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #444;
+                color: #fff;
+            }
+            QPushButton:pressed {
+                background-color: #222;
+                color: #fff;
+            }
+            """
+        )
+        self.stats_button.clicked.connect(self.open_stats_report)
+        button_hlayout.addWidget(self.stats_button)
+
+        layout.addLayout(button_hlayout)
 
         if self.client_dropdown.count():
             self.select_client(self.client_dropdown.currentText())
@@ -329,6 +451,26 @@ class TimeTracker(QWidget):
             self.session_label.setText(f"Session: {hours}h {minutes}m {seconds}s")
         else:
             self.session_label.setText("Session: 0h 0m 0s")
+
+    def open_csv_file(self):
+        file_path = str(DATA_FILE.resolve())
+
+        if platform.system() == "Windows":
+            subprocess.run(["start", "", file_path], shell=True)
+        elif platform.system() == "Darwin":  # macOS
+            subprocess.run(["open", file_path])
+        else:  # Linux
+            subprocess.run(["xdg-open", file_path])
+
+    def open_stats_report(self):
+        generate_report()
+        report_path = Path("report.html").resolve()
+        if report_path.exists():
+            webbrowser.open(str(report_path))
+        else:
+            QMessageBox.warning(
+                self, "Stats Report", "Report file not found. Please generate it first."
+            )
 
 
 if __name__ == "__main__":

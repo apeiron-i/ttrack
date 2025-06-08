@@ -20,8 +20,13 @@ from PySide6.QtWidgets import QSystemTrayIcon
 import subprocess
 import platform
 import webbrowser
-import plotly.express as px
-import pandas as pd
+from generate_report import generate_report
+import hashlib
+from datetime import date
+import shutil
+
+BACKUP_FOLDER = Path(".backups")
+BACKUP_FOLDER.mkdir(exist_ok=True)
 
 DATA_FILE = Path("sessions.csv")
 RUNNING_FILE = Path("running_session.csv")
@@ -30,78 +35,29 @@ ICON_PATH = Path(__file__).parent / "icon_tt.ico"
 ICON_ON_PATH = Path(__file__).parent / "icon_on.ico"
 
 
-def generate_report():
-    df = pd.read_csv("sessions.csv", parse_dates=["Start", "End"])
-    df["Duration"] = (df["End"] - df["Start"]).dt.total_seconds() / 3600
-    df["Date"] = df["Start"].dt.date
-    df["Week"] = df["Start"].dt.to_period("W").apply(lambda r: r.start_time)
-    df["Month"] = df["Start"].dt.to_period("M").apply(lambda r: r.start_time)
-    df["Weekday"] = df["Start"].dt.weekday
+def backup_sessions_csv(tag=""):
+    if not DATA_FILE.exists():
+        return
 
-    chart_height = 500
+    today_str = date.today().isoformat()
+    suffix = f"_{tag}" if tag else ""
+    backup_file = BACKUP_FOLDER / f"sessions_{today_str}{suffix}.csv"
 
-    # ----- 1. Monthly totals per client -----
-    monthly = df.groupby(["Client", "Month"])["Duration"].sum().reset_index()
-    fig_monthly = px.bar(
-        monthly,
-        x="Month",
-        y="Duration",
-        color="Client",
-        title="Total Hours per Client per Month",
-        labels={"Duration": "Hours"},
-        height=chart_height,
-    )
+    # Avoid overwriting an existing backup of the same type
+    if not backup_file.exists():
+        shutil.copy2(DATA_FILE, backup_file)
 
-    # ----- 2. Weekly totals per client -----
-    weekly = df.groupby(["Client", "Week"])["Duration"].sum().reset_index()
-    fig_weekly = px.bar(
-        weekly,
-        x="Week",
-        y="Duration",
-        color="Client",
-        title="Total Hours per Client per Week",
-        labels={"Duration": "Hours"},
-        height=chart_height,
-    )
 
-    # ----- 3. Daily average including all days -----
-    days_worked = df.groupby("Client")["Date"].nunique()
-    total_hours = df.groupby("Client")["Duration"].sum()
-    daily_avg = (total_hours / days_worked).reset_index()
-    daily_avg.columns = ["Client", "AvgHoursPerDay"]
-    fig_avg = px.bar(
-        daily_avg,
-        x="Client",
-        y="AvgHoursPerDay",
-        title="Average Hours per Day (All Days)",
-        labels={"AvgHoursPerDay": "Avg Hours"},
-        height=chart_height,
-    )
-
-    # ----- 4. Total hours per client per day -----
-    per_day = df.groupby(["Client", "Date"])["Duration"].sum().reset_index()
-    fig_day = px.bar(
-        per_day,
-        x="Date",
-        y="Duration",
-        color="Client",
-        title="Total Hours per Client per Day",
-        labels={"Duration": "Hours"},
-        height=chart_height,
-    )
-
-    # ----- Combine all into one HTML file -----
-    html_path = Path("report.html")
-    with open(html_path, "w") as f:
-        f.write("<html><head><title>Time Tracking Report</title></head><body>\n")
-        f.write("<h4 style='font-family:sans-serif;'>Time Tracking Summary</h4>\n")
-        f.write(fig_day.to_html(full_html=False, include_plotlyjs="cdn"))
-        f.write(fig_weekly.to_html(full_html=False, include_plotlyjs=False))
-        f.write(fig_monthly.to_html(full_html=False, include_plotlyjs=False))
-        f.write(fig_avg.to_html(full_html=False, include_plotlyjs=False))
-        f.write("</body></html>")
-
-    print(f"✅ Report saved to {html_path.resolve()}")
+def cleanup_old_backups(days=30):
+    cutoff = datetime.now() - timedelta(days=days)
+    for f in BACKUP_FOLDER.glob("sessions_*.csv"):
+        try:
+            timestamp = f.name.split("_")[1].split(".")[0]
+            file_date = datetime.strptime(timestamp, "%Y-%m-%d")
+            if file_date < cutoff:
+                f.unlink()
+        except Exception:
+            pass  # Skip bad filenames
 
 
 def load_sessions():
@@ -114,6 +70,12 @@ def load_sessions():
                     {"client": row["Client"], "start": row["Start"], "end": row["End"]}
                 )
     return sessions
+
+
+def get_csv_hash():
+    if not DATA_FILE.exists():
+        return None
+    return hashlib.md5(DATA_FILE.read_bytes()).hexdigest()
 
 
 def append_session(client, start, end):
@@ -159,10 +121,25 @@ def clear_session_state():
         HEARTBEAT_FILE.unlink()
 
 
+def validate_sessions(sessions):
+    errors = []
+    for i, s in enumerate(sessions):
+        try:
+            start = datetime.fromisoformat(s["start"])
+            end = datetime.fromisoformat(s["end"])
+            if end <= start:
+                errors.append(f"Row {i + 1}: End before Start ({start} → {end})")
+        except Exception as e:
+            errors.append(f"Row {i + 1}: Invalid timestamp — {e}")
+    return errors
+
+
 class TimeTracker(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TT")
+        backup_sessions_csv()
+        cleanup_old_backups()
 
         self.setWindowIcon(QIcon(str(ICON_PATH)))
         self.tray_icon = QSystemTrayIcon(self)
@@ -204,6 +181,16 @@ class TimeTracker(QWidget):
         """)
 
         self.sessions = load_sessions()
+        errors = validate_sessions(self.sessions)
+        if errors:
+            QMessageBox.critical(
+                self,
+                "CSV Error",
+                "⚠️ Invalid session data found:\n\n" + "\n".join(errors),
+            )
+            self.sessions = []  # or keep the valid ones only
+
+        self.csv_hash = get_csv_hash()
         self.current_client = None
         self.start_time = None
 
@@ -256,7 +243,7 @@ class TimeTracker(QWidget):
         self.recover_session()
 
         button_hlayout = QHBoxLayout()
-        self.edit_button = QPushButton("Edit CSV")
+        self.edit_button = QPushButton("Edit")
         self.edit_button.setStyleSheet(
             """
             QPushButton {
@@ -296,11 +283,67 @@ class TimeTracker(QWidget):
         self.stats_button.clicked.connect(self.open_stats_report)
         button_hlayout.addWidget(self.stats_button)
 
+        self.reload_button = QPushButton("Reload")
+        self.reload_button.setStyleSheet(
+            """
+            QPushButton {
+                font-size: 12px; color: #ccc; background-color: #333;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #444;
+                color: #fff;
+            }
+            QPushButton:pressed {
+                background-color: #222;
+                color: #fff;
+            }
+            """
+        )
+        self.reload_button.clicked.connect(self.reload_csv)
+        button_hlayout.addWidget(self.reload_button)
+
         layout.addLayout(button_hlayout)
 
         if self.client_dropdown.count():
             self.select_client(self.client_dropdown.currentText())
             QTimer.singleShot(0, self.update_ui)
+
+    def refresh_client_dropdown(self):
+        clients = [s["client"] for s in self.sessions]
+        unique_clients = sorted(set(clients))
+
+        self.client_dropdown.blockSignals(True)
+        self.client_dropdown.clear()
+        self.client_dropdown.addItems(unique_clients)
+        self.client_dropdown.blockSignals(False)
+
+        if clients:
+            self.client_dropdown.setCurrentText(clients[-1])
+            self.select_client(clients[-1])
+        else:
+            self.current_client = None
+
+    def reload_csv(self):
+        if self.start_time:
+            QMessageBox.warning(
+                self,
+                "Active Session",
+                "Cannot reload while a session is running.",
+            )
+            return
+
+        new_hash = get_csv_hash()
+        if new_hash != self.csv_hash:
+            self.sessions = load_sessions()
+            self.csv_hash = new_hash
+            self.refresh_client_dropdown()
+            self.update_ui()
+            QMessageBox.information(self, "Reloaded", "Sessions reloaded from CSV.")
+        else:
+            QMessageBox.information(
+                self, "No Change", "CSV has not changed since last load."
+            )
 
     def recover_session(self):
         recovered = load_running_session()
@@ -361,24 +404,35 @@ class TimeTracker(QWidget):
             return
 
         if self.start_time:
-            self.setWindowIcon(QIcon(str(ICON_PATH)))
-            self.tray_icon.setIcon(QIcon(str(ICON_PATH)))
-            self.tray_icon.setToolTip("Timer stopped")
-            self.tray_icon.show()
-
             end_time = datetime.now()
-            append_session(self.current_client, self.start_time, end_time)
-            clear_session_state()
-            self.sessions.append(
-                {
-                    "client": self.current_client,
-                    "start": self.start_time.isoformat(),
-                    "end": end_time.isoformat(),
-                }
-            )
-            self.start_time = None
-            self.timer_button.setText("Start")
-            self.timer_button.setStyleSheet("background-color: #28a745; color: white;")
+            try:
+                append_session(self.current_client, self.start_time, end_time)
+            except PermissionError:
+                QMessageBox.warning(
+                    self,
+                    "File Locked",
+                    "sessions.csv is open (e.g., in Excel).\nPlease close it and stop the timer again.",
+                )
+                return  # Don't end session
+            else:
+                self.setWindowIcon(QIcon(str(ICON_PATH)))
+                self.tray_icon.setIcon(QIcon(str(ICON_PATH)))
+                self.tray_icon.setToolTip("Timer stopped")
+                self.tray_icon.show()
+                clear_session_state()
+                self.sessions.append(
+                    {
+                        "client": self.current_client,
+                        "start": self.start_time.isoformat(),
+                        "end": end_time.isoformat(),
+                    }
+                )
+                self.start_time = None
+                self.timer_button.setText("Start")
+                self.timer_button.setStyleSheet(
+                    "background-color: #28a745; color: white;"
+                )
+
         else:
             self.setWindowIcon(QIcon(str(ICON_ON_PATH)))
             self.tray_icon.setIcon(QIcon(str(ICON_ON_PATH)))

@@ -20,6 +20,10 @@ a = Analysis(
     datas=[
         ("icon_tt.ico", "."),
         ("icon_on.ico", "."),
+        ("src/assets/i_table.png", "src/assets"),
+        ("src/assets/i_stats.png", "src/assets"),
+        ("src/assets/i_reload.png", "src/assets"),
+        ("src/assets/i_edit.png", "src/assets"),
         *plotly_data
     ],
 )

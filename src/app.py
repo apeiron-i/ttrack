@@ -24,6 +24,9 @@ from generate_report import generate_report
 import hashlib
 from datetime import date
 import shutil
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QDateTimeEdit
+import os
+from PySide6.QtWidgets import QSpacerItem, QSizePolicy
 
 BACKUP_FOLDER = Path(".backups")
 BACKUP_FOLDER.mkdir(exist_ok=True)
@@ -33,6 +36,12 @@ RUNNING_FILE = Path("running_session.csv")
 HEARTBEAT_FILE = Path("last_seen.txt")
 ICON_PATH = Path(__file__).parent / "icon_tt.ico"
 ICON_ON_PATH = Path(__file__).parent / "icon_on.ico"
+
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and PyInstaller"""
+    base_path = getattr(sys, "_MEIPASS", os.path.abspath("."))
+    return os.path.join(base_path, relative_path)
 
 
 def backup_sessions_csv(tag=""):
@@ -134,6 +143,43 @@ def validate_sessions(sessions):
     return errors
 
 
+class EditLastEntryDialog(QDialog):
+    def __init__(self, parent, last_entry):
+        super().__init__(parent)
+        self.setWindowTitle("Edit Last Entry")
+        self.setMinimumWidth(300)
+        self.last_entry = last_entry
+
+        layout = QFormLayout()
+
+        self.client_label = QLabel(last_entry["client"])
+        self.start_edit = QDateTimeEdit(datetime.fromisoformat(last_entry["start"]))
+        self.start_edit.setCalendarPopup(True)
+        self.start_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+
+        self.end_edit = QDateTimeEdit(datetime.fromisoformat(last_entry["end"]))
+        self.end_edit.setCalendarPopup(True)
+        self.end_edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+
+        layout.addRow("Client:", self.client_label)
+        layout.addRow("Start:", self.start_edit)
+        layout.addRow("End:", self.end_edit)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout.addWidget(buttons)
+        self.setLayout(layout)
+
+    def get_edited_values(self):
+        return {
+            "client": self.client_label.text(),
+            "start": self.start_edit.dateTime().toPython(),
+            "end": self.end_edit.dateTime().toPython(),
+        }
+
+
 class TimeTracker(QWidget):
     def __init__(self):
         super().__init__()
@@ -150,7 +196,7 @@ class TimeTracker(QWidget):
         # self.tray_icon.setIcon(QIcon("icon_tt.ico"))
         self.tray_icon.setVisible(True)
 
-        self.setFixedSize(300, 260)
+        # self.setFixedSize(300, 270)
 
         self.setStyleSheet("""
             QWidget {
@@ -243,7 +289,17 @@ class TimeTracker(QWidget):
         self.recover_session()
 
         button_hlayout = QHBoxLayout()
-        self.edit_button = QPushButton("Edit")
+
+        self.edit_button = QPushButton()
+        self.stats_button = QPushButton()
+        self.reload_button = QPushButton()
+        self.edit_last_button = QPushButton()
+
+        self.edit_button.setIcon(QIcon(resource_path("src/assets/i_table.png")))
+        self.stats_button.setIcon(QIcon(resource_path("src/assets/i_stats.png")))
+        self.reload_button.setIcon(QIcon(resource_path("src/assets/i_reload.png")))
+        self.edit_last_button.setIcon(QIcon(resource_path("src/assets/i_edit.png")))
+
         self.edit_button.setStyleSheet(
             """
             QPushButton {
@@ -261,9 +317,7 @@ class TimeTracker(QWidget):
             """
         )
         self.edit_button.clicked.connect(self.open_csv_file)
-        button_hlayout.addWidget(self.edit_button)
 
-        self.stats_button = QPushButton("Stats")
         self.stats_button.setStyleSheet(
             """
             QPushButton {
@@ -281,9 +335,7 @@ class TimeTracker(QWidget):
             """
         )
         self.stats_button.clicked.connect(self.open_stats_report)
-        button_hlayout.addWidget(self.stats_button)
 
-        self.reload_button = QPushButton("Reload")
         self.reload_button.setStyleSheet(
             """
             QPushButton {
@@ -301,8 +353,44 @@ class TimeTracker(QWidget):
             """
         )
         self.reload_button.clicked.connect(self.reload_csv)
+
+        self.edit_last_button.setStyleSheet(
+            """
+            QPushButton {
+                font-size: 12px; color: #ccc; background-color: #333;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #444;
+                color: #fff;
+            }
+            QPushButton:pressed {
+                background-color: #222;
+                color: #fff;
+            }
+            """
+        )
+        self.edit_last_button.clicked.connect(self.edit_last_entry)
+
+        self.edit_button.setToolTip(
+            "Open sessions.csv in Excel or your default editor."
+        )
+        self.stats_button.setToolTip("Generate and open the interactive stats report.")
+        self.reload_button.setToolTip(
+            "Reload sessions from CSV (use after manual edits)."
+        )
+        self.edit_last_button.setToolTip("Quickly edit the last recorded session.")
+        self.timer_button.setToolTip(
+            "Start or stop tracking time for the selected client."
+        )
+
+        button_hlayout.addWidget(self.edit_last_button)
+        button_hlayout.addWidget(self.stats_button)
+        button_hlayout.addWidget(self.edit_button)
         button_hlayout.addWidget(self.reload_button)
 
+        # Add vertical spacer before the button row
+        layout.addItem(QSpacerItem(20, 20, QSizePolicy.Minimum, QSizePolicy.Expanding))
         layout.addLayout(button_hlayout)
 
         if self.client_dropdown.count():
@@ -525,6 +613,48 @@ class TimeTracker(QWidget):
             QMessageBox.warning(
                 self, "Stats Report", "Report file not found. Please generate it first."
             )
+
+    def edit_last_entry(self):
+        if not self.sessions:
+            QMessageBox.information(self, "No Data", "No session found to edit.")
+            return
+
+        last_entry = self.sessions[-1]
+        dialog = EditLastEntryDialog(self, last_entry)
+        if dialog.exec() == QDialog.Accepted:
+            edited = dialog.get_edited_values()
+            if edited["end"] <= edited["start"]:
+                QMessageBox.warning(
+                    self, "Invalid Entry", "End time must be after start time."
+                )
+                return
+
+            # Update CSV in-place
+            all_rows = []
+            with open(DATA_FILE, newline="") as f:
+                reader = csv.DictReader(f)
+                all_rows = list(reader)
+
+            if not all_rows:
+                QMessageBox.warning(self, "Error", "CSV appears empty.")
+                return
+
+            all_rows[-1] = {
+                "Client": edited["client"],
+                "Start": edited["start"].isoformat(),
+                "End": edited["end"].isoformat(),
+            }
+
+            with open(DATA_FILE, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=["Client", "Start", "End"])
+                writer.writeheader()
+                writer.writerows(all_rows)
+
+            self.sessions = load_sessions()
+            self.csv_hash = get_csv_hash()
+            self.refresh_client_dropdown()
+            self.update_ui()
+            QMessageBox.information(self, "Saved", "Last entry updated.")
 
 
 if __name__ == "__main__":
